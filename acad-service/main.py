@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import psycopg2
+import requests
 import os
 from datetime import datetime
 from contextlib import contextmanager
@@ -52,8 +53,39 @@ async def startup_event():
     except Exception as e:
         print(f"Acad Service: PostgreSQL connection error: {e}")
 
+# URL ke auth-service untuk verifikasi JWT
+AUTH_VERIFY_URL = os.getenv(
+    "AUTH_VERIFY_URL",
+    "http://auth-service:3001/api/auth/verify",
+)
+
+def verify_token_or_raise(authorization: str | None):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token tidak diberikan")
+
+    token = authorization.split(" ", 1)[1]
+
+    try:
+        resp = requests.post(
+            AUTH_VERIFY_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=401, detail="Token tidak valid")
+
+        data = resp.json()
+        if not data.get("valid"):
+            raise HTTPException(status_code=401, detail="Token tidak valid")
+
+        return data.get("user")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal verifikasi token: {e}")
+
 # Health check
-@app.get("/health")
+@app.get("/api/acad/health")
 async def health_check():
     return {
         "status": "Acad Service is running",
@@ -76,11 +108,12 @@ async def get_mahasiswas():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Hitung IPS per mahasiswa per semester
+# Hitung IPS per mahasiswa per semester (protected dengan JWT)
 @app.get("/api/acad/ips/{nim}")
 async def get_ips(
     nim: str,
     semester: int = Query(..., ge=1, description="Semester yang akan dihitung IPS-nya"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
     """
     Menghitung IPS berdasarkan tabel:
@@ -88,6 +121,9 @@ async def get_ips(
     - mata_kuliah
     - bobot_nilai
     """
+    # Verifikasi token dulu
+    user = verify_token_or_raise(authorization)
+
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -131,6 +167,7 @@ async def get_ips(
                 "semester": semester,
                 "total_sks": total_sks,
                 "ips": round(ips, 2),
+                "requested_by": user.get("username") if user else None,
             }
 
     except HTTPException:
