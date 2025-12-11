@@ -1,4 +1,7 @@
+version: "3.9"
+
 services:
+  # API Gateway (Nginx)
   api-gateway:
     image: nginx:alpine
     container_name: api-gateway
@@ -8,7 +11,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
-      - "8080:80"
+      - "8081:80"
     networks:
       - microservices-network
 
@@ -30,8 +33,13 @@ services:
       - /app/node_modules
     networks:
       - microservices-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: "512M"
 
-  # Auth Database
+  # Auth Database (MongoDB)
   auth-db:
     image: mongo:6.0
     container_name: auth-db
@@ -41,8 +49,9 @@ services:
       - auth-data:/data/db
     networks:
       - microservices-network
+    restart: always
 
-  # Acad Service
+  # Acad Service (FastAPI)
   acad-service:
     build: ./acad-service
     container_name: acad-service
@@ -54,6 +63,7 @@ services:
       DB_NAME: acad_db
       DB_USER: acad_user
       DB_PASSWORD: acad_pass
+      AUTH_VERIFY_URL: http://auth-service:3001/api/auth/verify
     ports:
       - "3002:3002"
     volumes:
@@ -61,7 +71,7 @@ services:
     networks:
       - microservices-network
 
-  # Acad DB
+  # Acad Database (PostgreSQL)
   acad-db:
     image: postgres:16-alpine
     container_name: acad-db
@@ -80,6 +90,9 @@ services:
 networks:
   microservices-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: "172.16.0.0/28"
 
 volumes:
   auth-data:
